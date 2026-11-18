@@ -5,27 +5,51 @@
 The system is a single-loop tool-calling agent built on Node.js/TypeScript backed by **Temporal-Hybrid Episodic Memory** and live **Web Search**.
 
 ```text
-User Prompt + Server Timestamp
-       │
-       ▼
-┌──────────────────────────────────────────────────────────┐
-│                 Single-Loop Chat Agent                   │
-│  Tools:                                                  │
-│   1. search_past_chats(query, keywords, date_from, to)   │
-│   2. web_search(query)                                   │
-└──────────────┬────────────────────────────┬──────────────┘
-               │ (if past context needed)   │ (if live facts needed)
-               ▼                            ▼
-┌────────────────────────────┐   ┌─────────────────────────┐
-│  Local SQLite Hybrid DB    │   │     Web Search API      │
-│  • Date Filter (B-Tree)    │   │  (Targeted verification │
-│  • FTS5 (BM25 Keywords)    │   │   against past claims)  │
-│  • sqlite-vec (768d Cosine)│   └─────────────────────────┘
-└────────────────────────────┘
-               │
-               ▼
-   Stream Response to User ──► onFinish (Async Background):
-                               Extract JSON Claims + Local Embed ──► Write SQLite
++------------------------------------------------------------------------------+
+| 1. INGEST & CONTEXT ASSEMBLY                                                 |
+|                                                                              |
+|  User Message + Active Session Window (last 6 turns) + Server ISO Timestamp  |
++--------------------------------------+---------------------------------------+
+                                       |
+                                       v
++------------------------------------------------------------------------------+
+| 2. AUTONOMOUS AGENT LOOP (Node.js / TypeScript)                              |
+|                                                                              |
+|  * System prompt injects exact current date & day of week                    |
+|  * Resolves relative dates ("Last Tuesday" -> YYYY-MM-DD)                    |
+|  * Loops over tool calls until ready to synthesize final answer              |
++-------------------+--------------------------------------+-------------------+
+                    |                                      |
+      (if past context needed)               (if live verification needed)
+                    |                                      |
+                    v                                      v
++---------------------------------------+  +-----------------------------------+
+| Tool: search_past_chats               |  | Tool: web_search                  |
+|                                       |  |                                   |
+| 1. SQL Date Filter (B-Tree +/- 1 day) |  | * Runs targeted queries using     |
+| 2. FTS5 (BM25) + sqlite-vec (768d)    |  |   retrieved entities & claims     |
+| 3. RRF Fusion: 1/(60+r1) + 1/(60+r2)  |  | * Parallelizable across items     |
+| 4. Hydrate turns + claim snapshots    |  |                                   |
++-------------------+-------------------+  +-----------------+-----------------+
+                    ^                                        |
+                    | (read)                                 | (live results)
+                    |                                        v
++-------------------+-------------------+  +-----------------------------------+
+| SQLite Storage (WAL Mode, Single .db) |  | 3. STREAM RESPONSE                |
+|                                       |  |                                   |
+| * episodic_turns (raw pairs + dates)  |  | * Streams diff/answer over HTTP   |
+| * turn_snapshots (JSON claims/entities|  |   immediately to user             |
+| * turns_fts      (FTS5 keyword index) |  +-----------------+-----------------+
+| * turns_vec      (vec0 Float32[768])  |                    |
++-------------------+-------------------+                    | (onFinish hook)
+                    ^                                        v
+                    | (atomic transaction) +-----------------------------------+
+                    +----------------------+ 4. ASYNC BACKGROUND INDEXING      |
+                                           |                                   |
+                                           | * Extract JSON summary & claims   |
+                                           | * Local embed via Nomic v1.5 (q8) |
+                                           |   ("search_document: " prefix)    |
+                                           +-----------------------------------+
 ```
 
 * **Temporal Grounding:** Every request injects the server's exact ISO timestamp and day of the week into the system prompt so the model deterministically resolves relative dates (*"Last Tuesday"*, *"On Monday"*, *"3 November"*) into `YYYY-MM-DD` bounds.
