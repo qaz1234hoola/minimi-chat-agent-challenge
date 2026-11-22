@@ -21,16 +21,16 @@ const TOOLS: ChatCompletionTool[] = [
             description: "Natural-language description of the past topic or question.",
           },
           keywords: {
-            type: "string",
-            description: "Exact product names, brand names, or key nouns (optional).",
+            type: ["string", "null"],
+            description: "Exact product names, brand names, or key nouns, or null.",
           },
           date_from: {
-            type: "string",
-            description: "Inclusive start date in YYYY-MM-DD format (optional).",
+            type: ["string", "null"],
+            description: "Inclusive start date in YYYY-MM-DD format, or null.",
           },
           date_to: {
-            type: "string",
-            description: "Inclusive end date in YYYY-MM-DD format (optional).",
+            type: ["string", "null"],
+            description: "Inclusive end date in YYYY-MM-DD format, or null.",
           },
         },
         required: ["semantic_query"],
@@ -104,44 +104,56 @@ export async function runAgentTurn(params: {
   }
   messages.push({ role: "user", content: params.userMessage });
 
-  // Autonomous agent loop (max 5 tool-calling rounds)
+// Autonomous agent loop (max 5 tool-calling rounds)
   for (let step = 0; step < 5; step++) {
-    const stream = await openai.chat.completions.create({
-      model,
-      messages,
-      tools: TOOLS,
-      tool_choice: "auto",
-      stream: true,
-    });
-
     let assistantText = "";
     const toolCallsMap = new Map<
       number,
       { id: string; name: string; arguments: string }
     >();
 
-    for await (const chunk of stream) {
-      const delta = chunk.choices[0]?.delta;
-      if (!delta) continue;
+    try {
+      const stream = await openai.chat.completions.create({
+        model,
+        messages,
+        tools: TOOLS,
+        tool_choice: "auto",
+        stream: true,
+      });
 
-      if (delta.content) {
-        assistantText += delta.content;
-        params.callbacks.onToken(delta.content);
-      }
+      for await (const chunk of stream) {
+        const delta = chunk.choices[0]?.delta;
+        if (!delta) continue;
 
-      if (delta.tool_calls) {
-        for (const tc of delta.tool_calls) {
-          const existing = toolCallsMap.get(tc.index) ?? {
-            id: tc.id ?? "",
-            name: tc.function?.name ?? "",
-            arguments: "",
-          };
-          if (tc.id) existing.id = tc.id;
-          if (tc.function?.name) existing.name = tc.function.name;
-          if (tc.function?.arguments) existing.arguments += tc.function.arguments;
-          toolCallsMap.set(tc.index, existing);
+        if (delta.content) {
+          assistantText += delta.content;
+          params.callbacks.onToken(delta.content);
+        }
+
+        if (delta.tool_calls) {
+          for (const tc of delta.tool_calls) {
+            const existing = toolCallsMap.get(tc.index) ?? {
+              id: tc.id ?? "",
+              name: tc.function?.name ?? "",
+              arguments: "",
+            };
+            if (tc.id) existing.id = tc.id;
+            if (tc.function?.name) existing.name = tc.function.name;
+            if (tc.function?.arguments) existing.arguments += tc.function.arguments;
+            toolCallsMap.set(tc.index, existing);
+          }
         }
       }
+    } catch (err: any) {
+      const errCode = err?.code || err?.error?.code;
+      if (errCode === "tool_use_failed" && step < 4) {
+        messages.push({
+          role: "user",
+          content: `System note: Your previous tool call failed schema validation (${err?.error?.message || err.message}). Retry with valid JSON types.`,
+        });
+        continue;
+      }
+      throw err;
     }
 
     const toolCalls = [...toolCallsMap.values()];

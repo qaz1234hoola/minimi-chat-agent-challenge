@@ -3,9 +3,9 @@ import { embedText } from "../memory/embedder.js";
 
 export interface PastChatSearchInput {
   semantic_query: string;
-  keywords?: string;
-  date_from?: string; // YYYY-MM-DD
-  date_to?: string;   // YYYY-MM-DD
+  keywords?: string | null;
+  date_from?: string | null; // YYYY-MM-DD
+  date_to?: string | null;   // YYYY-MM-DD
   limit?: number;
 }
 
