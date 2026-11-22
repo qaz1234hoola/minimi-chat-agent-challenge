@@ -71,6 +71,7 @@ export async function runAgentTurn(params: {
   const openai = new OpenAI({
     apiKey: process.env.GROQ_API_KEY || process.env.OPENAI_API_KEY,
     baseURL: process.env.OPENAI_BASE_URL || "https://api.groq.com/openai/v1",
+    maxRetries: 1,
   });
   const model = process.env.LLM_MODEL || "openai/gpt-oss-120b";
   const now = new Date();
@@ -106,6 +107,7 @@ export async function runAgentTurn(params: {
 
 // Autonomous agent loop (max 5 tool-calling rounds)
   for (let step = 0; step < 5; step++) {
+    console.time(`[Agent] Step ${step} LLM`);
     let assistantText = "";
     const toolCallsMap = new Map<
       number,
@@ -118,6 +120,7 @@ export async function runAgentTurn(params: {
         messages,
         tools: TOOLS,
         tool_choice: "auto",
+        reasoning_effort: "low",
         stream: true,
       });
 
@@ -155,7 +158,7 @@ export async function runAgentTurn(params: {
       }
       throw err;
     }
-
+    console.timeEnd(`[Agent] Step ${step} LLM`);
     const toolCalls = [...toolCallsMap.values()];
 
     // Exit condition: model produced final text with no pending tool calls
@@ -165,14 +168,13 @@ export async function runAgentTurn(params: {
       // Zero-latency background indexing (onFinish)
       void indexTurnInBackground({
         openai,
-        model,
+        model: "openai/gpt-oss-20b",
         sessionId: params.sessionId,
         turnIndex: nextTurnIndex,
         userMessage: params.userMessage,
         assistantResponse: assistantText,
         timestamp: now,
       });
-      return;
     }
 
     // Record assistant tool-call request in message history

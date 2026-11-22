@@ -20,7 +20,7 @@ export async function webSearch(query: string): Promise<WebSearchResult[]> {
     body: JSON.stringify({
       query,
       search_depth: "fast",
-      max_results: 5,
+      max_results: 3,
       include_answer: false,
     }),
   });
@@ -42,7 +42,7 @@ export async function webSearch(query: string): Promise<WebSearchResult[]> {
   return (data.results ?? []).map((item) => ({
     title: item.title ?? "Untitled",
     url: item.url ?? "",
-    snippet: (item.content ?? "").slice(0, 600),
+    snippet: (item.content ?? "").slice(0, 350),
     published_date: item.published_date,
   }));
 }
